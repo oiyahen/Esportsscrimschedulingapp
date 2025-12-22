@@ -1,17 +1,23 @@
 import { useState } from 'react';
-import { ArrowLeft, MapPin, Check } from 'lucide-react';
+import { MapPin } from 'lucide-react';
 import { Card } from '../ui/Card';
-import { Button } from '../ui/Button';
 
 interface RegionSelectionProps {
-  onComplete?: () => void;
-  onBack?: () => void;
+  onComplete: () => void;
+  onBack: () => void;
+  currentRegion?: string | null;
+  onRegionSelected?: (region: string) => void;
 }
 
-export function RegionSelection({ onComplete, onBack }: RegionSelectionProps) {
-  const [selectedPrimary, setSelectedPrimary] = useState<string>('');
-  const [nearbyRegions, setNearbyRegions] = useState<string[]>([]);
+export function RegionSelection({
+  onComplete,
+  onBack,
+  currentRegion,
+  onRegionSelected,
+}: RegionSelectionProps) {
+  const [selectedRegion, setSelectedRegion] = useState<string>(currentRegion || '');
 
+  // Single region list – ids should match what you store in Supabase
   const regions = [
     { id: 'pacific-nw', label: 'Pacific NW', x: 10, y: 35, width: 18, height: 22 },
     { id: 'pacific-sw', label: 'Pacific SW', x: 10, y: 57, width: 18, height: 25 },
@@ -22,38 +28,19 @@ export function RegionSelection({ onComplete, onBack }: RegionSelectionProps) {
   ];
 
   const handleRegionClick = (regionId: string) => {
-    setSelectedPrimary(regionId);
-    // Remove from nearby if it was selected
-    setNearbyRegions(prev => prev.filter(id => id !== regionId));
+    setSelectedRegion(regionId);
   };
 
-  const toggleNearbyRegion = (regionId: string) => {
-    if (regionId === selectedPrimary) return;
-    
-    setNearbyRegions(prev =>
-      prev.includes(regionId)
-        ? prev.filter(id => id !== regionId)
-        : [...prev, regionId]
-    );
+  const handleContinue = () => {
+    if (onRegionSelected && selectedRegion) {
+      onRegionSelected(selectedRegion);
+    }
+    onComplete();
   };
-
-  const availableNearbyRegions = regions.filter(r => r.id !== selectedPrimary);
 
   return (
     <div className="min-h-screen bg-[#0a0a0b] flex items-center justify-center p-4">
       <div className="w-full max-w-3xl">
-        {/* Back Button */}
-        {onBack && (
-          <button
-            onClick={onBack}
-            className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors mb-6"
-          >
-            <ArrowLeft className="w-5 h-5" />
-            <span>Back</span>
-          </button>
-        )}
-
-        {/* Main Card */}
         <Card className="p-6 lg:p-10">
           {/* Header */}
           <div className="text-center mb-8">
@@ -62,7 +49,7 @@ export function RegionSelection({ onComplete, onBack }: RegionSelectionProps) {
             </div>
             <h1 className="text-2xl lg:text-3xl mb-2">Choose your region</h1>
             <p className="text-gray-400 max-w-lg mx-auto">
-              We'll use this to find scrims with better ping and similar scrim times.
+              We&apos;ll use this to find scrims with better ping and similar scrim times.
             </p>
           </div>
 
@@ -75,11 +62,9 @@ export function RegionSelection({ onComplete, onBack }: RegionSelectionProps) {
                   className="absolute inset-0 w-full h-full"
                   style={{ filter: 'drop-shadow(0 0 20px rgba(59, 130, 246, 0.1))' }}
                 >
-                  {/* Map Regions */}
                   {regions.map((region) => {
-                    const isSelected = selectedPrimary === region.id;
-                    const isNearby = nearbyRegions.includes(region.id);
-                    
+                    const isSelected = selectedRegion === region.id;
+
                     return (
                       <g key={region.id}>
                         {/* Region Shape */}
@@ -92,13 +77,11 @@ export function RegionSelection({ onComplete, onBack }: RegionSelectionProps) {
                           className={`cursor-pointer transition-all ${
                             isSelected
                               ? 'fill-blue-500/30 stroke-blue-500 stroke-2'
-                              : isNearby
-                              ? 'fill-purple-500/20 stroke-purple-500 stroke-1'
                               : 'fill-gray-800/50 stroke-gray-700 stroke-1 hover:fill-gray-700/50 hover:stroke-gray-600'
                           }`}
                           onClick={() => handleRegionClick(region.id)}
                         />
-                        
+
                         {/* Region Label */}
                         <text
                           x={region.x + region.width / 2}
@@ -106,11 +89,7 @@ export function RegionSelection({ onComplete, onBack }: RegionSelectionProps) {
                           textAnchor="middle"
                           dominantBaseline="middle"
                           className={`text-[3.5px] lg:text-[4px] pointer-events-none select-none ${
-                            isSelected
-                              ? 'fill-blue-400'
-                              : isNearby
-                              ? 'fill-purple-400'
-                              : 'fill-gray-400'
+                            isSelected ? 'fill-blue-400' : 'fill-gray-400'
                           }`}
                           style={{ fontWeight: 600 }}
                         >
@@ -145,14 +124,14 @@ export function RegionSelection({ onComplete, onBack }: RegionSelectionProps) {
             </div>
           </div>
 
-          {/* Primary Region Display */}
-          <div className="mb-6">
-            <label className="block text-sm text-gray-400 mb-2">Primary Region</label>
+          {/* Region Display */}
+          <div className="mb-8">
+            <label className="block text-sm text-gray-400 mb-2">Region</label>
             <div className="px-4 py-3 bg-gray-900/50 border border-gray-800 rounded-xl">
-              {selectedPrimary ? (
+              {selectedRegion ? (
                 <div className="flex items-center gap-2 text-blue-400">
                   <MapPin className="w-4 h-4" />
-                  <span>{regions.find(r => r.id === selectedPrimary)?.label}</span>
+                  <span>{regions.find((r) => r.id === selectedRegion)?.label}</span>
                 </div>
               ) : (
                 <span className="text-gray-500">Select a region on the map</span>
@@ -160,53 +139,25 @@ export function RegionSelection({ onComplete, onBack }: RegionSelectionProps) {
             </div>
           </div>
 
-          {/* Nearby Regions */}
-          {selectedPrimary && (
-            <div className="mb-8">
-              <label className="block text-sm text-gray-400 mb-3">
-                Nearby Regions <span className="text-gray-600">(optional)</span>
-              </label>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {availableNearbyRegions.map((region) => {
-                  const isChecked = nearbyRegions.includes(region.id);
-                  return (
-                    <button
-                      key={region.id}
-                      type="button"
-                      onClick={() => toggleNearbyRegion(region.id)}
-                      className={`flex items-center justify-between px-4 py-3 rounded-xl border-2 transition-all ${
-                        isChecked
-                          ? 'border-purple-500 bg-purple-500/10 text-purple-400'
-                          : 'border-gray-800 bg-gray-900/50 text-gray-400 hover:border-gray-700'
-                      }`}
-                    >
-                      <span className="text-sm">{region.label}</span>
-                      {isChecked && <Check className="w-4 h-4" />}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
           {/* Action Buttons */}
           <div className="flex flex-col-reverse sm:flex-row gap-3">
             {onBack && (
-              <Button
-                variant="ghost"
+              <button
+                type="button"
                 onClick={onBack}
-                className="flex-1"
+                className="inline-flex items-center justify-center gap-2 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed text-gray-400 hover:text-white hover:bg-gray-900/50 px-4 py-2.5 flex-1"
               >
                 Back
-              </Button>
+              </button>
             )}
-            <Button
-              onClick={onComplete}
-              disabled={!selectedPrimary}
-              className="flex-1"
+            <button
+              type="button"
+              onClick={handleContinue}
+              disabled={!selectedRegion}
+              className="inline-flex items-center justify-center gap-2 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white shadow-lg shadow-blue-500/20 hover:shadow-blue-500/30 px-4 py-2.5 flex-1"
             >
               Continue
-            </Button>
+            </button>
           </div>
         </Card>
       </div>

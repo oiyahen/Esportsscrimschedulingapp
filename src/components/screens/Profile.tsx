@@ -1,13 +1,156 @@
-import { User, Mail, MapPin, Calendar, Settings, Trophy, Target, Clock, Bell, Shield, LogOut } from 'lucide-react';
+import { useState } from 'react';
+import {
+  User,
+  Mail,
+  MapPin,
+  Calendar,
+  Settings,
+  Trophy,
+  Target,
+  Clock,
+  Bell,
+  Shield,
+  LogOut,
+} from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Tag } from '../ui/Tag';
 
 interface ProfileProps {
   onNavigateToRegionSelection?: () => void;
+  profile?: any | null;
+  onUpdateProfile?: (updates: {
+    username?: string;
+    handle?: string;
+    email?: string;
+    primary_team?: string;
+  }) => void;
 }
 
-export function Profile({ onNavigateToRegionSelection }: ProfileProps = {}) {
+export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile }: ProfileProps = {}) {
+  const displayUsername = profile?.username ?? 'JohnDoe';
+
+  const initials = (() => {
+    const name = displayUsername.trim();
+    if (!name) return 'P';
+
+    const parts = name.split(' ').filter(Boolean);
+
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+
+    if (parts[0].length >= 2) {
+      return (parts[0][0] + parts[0][1]).toUpperCase();
+    }
+
+    return parts[0][0].toUpperCase();
+  })();
+
+  // Map internal region IDs to nice labels
+  const REGION_LABELS: Record<string, string> = {
+    'pacific-nw': 'Pacific NW',
+    'pacific-sw': 'Pacific SW',
+    'central-north': 'Central N',
+    'central-south': 'Central S',
+    'atlantic-north': 'Atlantic N',
+    'atlantic-south': 'Atlantic S',
+  };
+
+  const rawRegion: string = profile?.primary_region ?? '';
+  const displayRegion =
+    rawRegion && REGION_LABELS[rawRegion]
+      ? REGION_LABELS[rawRegion]
+      : rawRegion || 'Region not set';
+
+  const rawHandle: string | undefined = profile?.handle;
+  const displayHandle =
+    rawHandle && rawHandle.length > 0
+      ? rawHandle.startsWith('@')
+        ? rawHandle
+        : `@${rawHandle}`
+      : `@${displayUsername.toLowerCase() || 'player'}`;
+
+  const displayEmail = profile?.email ?? 'email@example.com';
+  const displayTeam = profile?.primary_team ?? 'Vanguard Prime';
+
+  let memberSince = 'January 2024';
+  if (profile?.created_at) {
+    const date = new Date(profile.created_at);
+    if (!isNaN(date.getTime())) {
+      memberSince = date.toLocaleString('en-US', {
+        month: 'long',
+        year: 'numeric',
+      });
+    }
+  }
+
+  // Local edit state
+  const [isEditing, setIsEditing] = useState(false);
+  const [formUsername, setFormUsername] = useState(displayUsername);
+  const [formHandle, setFormHandle] = useState(rawHandle ?? '');
+  const [formEmail, setFormEmail] = useState(profile?.email ?? '');
+  const [formTeam, setFormTeam] = useState(profile?.primary_team ?? '');
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const startEditing = () => {
+    setFormUsername(displayUsername);
+    setFormHandle(rawHandle ?? '');
+    setFormEmail(profile?.email ?? '');
+    setFormTeam(profile?.primary_team ?? '');
+    setFormError(null);
+    setIsEditing(true);
+  };
+
+  const cancelEditing = () => {
+    setFormError(null);
+    setIsEditing(false);
+  };
+
+  const handleSave = async () => {
+    if (!onUpdateProfile) {
+      console.warn('[Profile] onUpdateProfile not provided');
+      return;
+    }
+
+    setFormError(null);
+
+    const trimmedUsername = formUsername.trim();
+    const trimmedHandle = formHandle.trim();
+    const trimmedEmail = formEmail.trim();
+    const trimmedTeam = formTeam.trim();
+
+    // Username required
+    if (!trimmedUsername) {
+      setFormError('Username is required.');
+      return;
+    }
+
+    // Handle: no spaces if provided
+    if (trimmedHandle && /\s/.test(trimmedHandle)) {
+      setFormError('Handle cannot contain spaces.');
+      return;
+    }
+
+    // Email: basic format check if provided
+    if (trimmedEmail) {
+      const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailPattern.test(trimmedEmail)) {
+        setFormError('Please enter a valid email address.');
+        return;
+      }
+    }
+
+    await onUpdateProfile({
+      username: trimmedUsername,
+      handle: trimmedHandle || undefined,
+      email: trimmedEmail || undefined,
+      primary_team: trimmedTeam || undefined,
+    });
+
+    setIsEditing(false);
+  };
+
   const userStats = [
     { label: 'Total Scrims', value: '156', icon: Target },
     { label: 'This Month', value: '24', icon: Calendar },
@@ -37,11 +180,76 @@ export function Profile({ onNavigateToRegionSelection }: ProfileProps = {}) {
             <div className="flex flex-col items-center text-center">
               {/* Avatar */}
               <div className="w-24 h-24 bg-gradient-to-br from-purple-500 to-pink-600 rounded-full flex items-center justify-center text-3xl mb-4">
-                JD
+                {initials}
               </div>
-              
-              <h2 className="text-xl mb-1">JohnDoe</h2>
-              <p className="text-sm text-gray-400 mb-4">@johndoe_gaming</p>
+
+              {/* Displayed name + handle */}
+              {!isEditing && (
+                <>
+                  <h2 className="text-xl mb-1">{displayUsername}</h2>
+                  <p className="text-sm text-gray-400 mb-4">{displayHandle}</p>
+                </>
+              )}
+
+              {/* Edit form */}
+              {isEditing && (
+                <div className="w-full space-y-3 mb-4">
+                  {/* Username */}
+                  <div className="text-left">
+                    <label className="block text-xs text-gray-400 mb-1">Username</label>
+                    <input
+                      type="text"
+                      value={formUsername}
+                      onChange={(e) => setFormUsername(e.target.value)}
+                      className="w-full rounded-lg bg-gray-900/70 border border-gray-700 px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+
+                  {/* Handle */}
+                  <div className="text-left">
+                    <label className="block text-xs text-gray-400 mb-1">Handle</label>
+                    <div className="flex items-center gap-1">
+                      <span className="text-sm text-gray-500">@</span>
+                      <input
+                        type="text"
+                        value={formHandle}
+                        onChange={(e) => setFormHandle(e.target.value.replace(/^@/, ''))}
+                        className="w-full rounded-lg bg-gray-900/70 border border-gray-700 px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+                        placeholder="your_handle"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Email */}
+                  <div className="text-left">
+                    <label className="block text-xs text-gray-400 mb-1">Email</label>
+                    <input
+                      type="email"
+                      value={formEmail}
+                      onChange={(e) => setFormEmail(e.target.value)}
+                      className="w-full rounded-lg bg-gray-900/70 border border-gray-700 px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+                      placeholder="email@example.com"
+                    />
+                  </div>
+
+                  {/* Primary Team */}
+                  <div className="text-left">
+                    <label className="block text-xs text-gray-400 mb-1">Current Team</label>
+                    <input
+                      type="text"
+                      value={formTeam}
+                      onChange={(e) => setFormTeam(e.target.value)}
+                      className="w-full rounded-lg bg-gray-900/70 border border-gray-700 px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+                      placeholder="Your main team name"
+                    />
+                  </div>
+
+                  {/* Error message */}
+                  {formError && (
+                    <p className="text-xs text-red-400 mt-1">{formError}</p>
+                  )}
+                </div>
+              )}
 
               <div className="flex flex-wrap gap-2 justify-center mb-6">
                 <Tag variant="purple">
@@ -54,10 +262,32 @@ export function Profile({ onNavigateToRegionSelection }: ProfileProps = {}) {
                 </Tag>
               </div>
 
-              <Button className="w-full mb-3">
-                <Settings className="w-4 h-4" />
-                Edit Profile
-              </Button>
+              {/* Edit / Cancel + Save buttons */}
+              <div className="w-full space-y-2">
+                <Button
+                  className="w-full"
+                  onClick={() => {
+                    if (isEditing) {
+                      cancelEditing();
+                    } else {
+                      startEditing();
+                    }
+                  }}
+                >
+                  <Settings className="w-4 h-4" />
+                  {isEditing ? 'Cancel' : 'Edit Profile'}
+                </Button>
+
+                {isEditing && (
+                  <Button
+                    className="w-full bg-blue-600 hover:bg-blue-500"
+                    onClick={handleSave}
+                    disabled={!onUpdateProfile}
+                  >
+                    Save Changes
+                  </Button>
+                )}
+              </div>
             </div>
           </Card>
 
@@ -69,7 +299,7 @@ export function Profile({ onNavigateToRegionSelection }: ProfileProps = {}) {
                 <Mail className="w-5 h-5 text-gray-400 mt-0.5" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm text-gray-400">Email</div>
-                  <div className="text-sm truncate">john.doe@example.com</div>
+                  <div className="text-sm truncate">{displayEmail}</div>
                 </div>
               </div>
 
@@ -77,7 +307,7 @@ export function Profile({ onNavigateToRegionSelection }: ProfileProps = {}) {
                 <MapPin className="w-5 h-5 text-gray-400 mt-0.5" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm text-gray-400">Region</div>
-                  <div className="text-sm">Atlantic North</div>
+                  <div className="text-sm">{displayRegion}</div>
                 </div>
               </div>
 
@@ -85,7 +315,7 @@ export function Profile({ onNavigateToRegionSelection }: ProfileProps = {}) {
                 <Calendar className="w-5 h-5 text-gray-400 mt-0.5" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm text-gray-400">Member Since</div>
-                  <div className="text-sm">January 2024</div>
+                  <div className="text-sm">{memberSince}</div>
                 </div>
               </div>
 
@@ -93,7 +323,7 @@ export function Profile({ onNavigateToRegionSelection }: ProfileProps = {}) {
                 <User className="w-5 h-5 text-gray-400 mt-0.5" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm text-gray-400">Current Team</div>
-                  <div className="text-sm">Vanguard Prime</div>
+                  <div className="text-sm">{displayTeam}</div>
                 </div>
               </div>
             </div>
@@ -166,7 +396,7 @@ export function Profile({ onNavigateToRegionSelection }: ProfileProps = {}) {
                 <span className="text-sm text-gray-500">→</span>
               </button>
 
-              <button 
+              <button
                 onClick={onNavigateToRegionSelection}
                 className="w-full flex items-center justify-between p-4 bg-gray-900/30 rounded-xl hover:bg-gray-900/50 transition-colors"
               >
