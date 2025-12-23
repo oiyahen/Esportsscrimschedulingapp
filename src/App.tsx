@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Calendar, Target, Users, User, Plus } from 'lucide-react';
+import { Calendar, Target, Users, User } from 'lucide-react';
 import { TopNav } from './components/TopNav';
 import { DesktopSidebar } from './components/DesktopSidebar';
 import { MobileTabBar } from './components/MobileTabBar';
@@ -13,59 +13,57 @@ import { Profile } from './components/screens/Profile';
 import { RegionSelection } from './components/screens/RegionSelection';
 import { supabase } from './lib/supabaseclient';
 import type { Session } from '@supabase/supabase-js';
-import { AuthScreen } from './components/screens/AuthScreen'; 
-
+import { AuthScreen } from './components/screens/AuthScreen';
 
 export default function App() {
-// 1) Your existing state
-const [currentScreen, setCurrentScreen] = useState<
-  'home' | 'scrim-center' | 'create-scrim' | 'scrim-details' | 'my-team' | 'profile' | 'region-selection'
->('home');
-const [selectedScrimId, setSelectedScrimId] = useState<string | null>(null);
-const [showOnboarding, setShowOnboarding] = useState(false); // Toggle this to true to show region selection
-const [debugProfile, setDebugProfile] = useState<any | null>(null);
-const [session, setSession] = useState<Session | null>(null);
-const [authLoading, setAuthLoading] = useState(true);
+  const [currentScreen, setCurrentScreen] = useState<
+    'home' | 'scrim-center' | 'create-scrim' | 'scrim-details' | 'my-team' | 'profile' | 'region-selection'
+  >('home');
 
-  // AUTH: init + subscribe (single source of truth)
-useEffect(() => {
-  let isMounted = true;
+  const [selectedScrimId, setSelectedScrimId] = useState<string | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [debugProfile, setDebugProfile] = useState<any | null>(null);
 
-  const init = async () => {
-    console.log('[Auth] Checking current session…');
-    const { data, error } = await supabase.auth.getSession();
-    if (error) console.error('[Auth] Error fetching session:', error);
+  const [session, setSession] = useState<Session | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
-    if (!isMounted) return;
+  const [scrims, setScrims] = useState<any[]>([]);
 
-    setSession(data.session ?? null);
-    setAuthLoading(false);
-  };
+  useEffect(() => {
+    let isMounted = true;
 
-  init();
+    const init = async () => {
+      const { data, error } = await supabase.auth.getSession();
+      if (error) console.error('[Auth] Error fetching session:', error);
+      if (!isMounted) return;
 
-  const { data: sub } = supabase.auth.onAuthStateChange((event, newSession) => {
-    console.log('[Auth] Auth state changed:', event);
-    setSession(newSession);
-  });
+      setSession(data.session ?? null);
+      setAuthLoading(false);
+    };
 
-  return () => {
-    isMounted = false;
-    sub.subscription.unsubscribe();
-  };
-}, []);
+    init();
 
-useEffect(() => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, newSession) => {
+      console.log('[Auth] Auth state changed:', event);
+      setSession(newSession);
+    });
+
+    return () => {
+      isMounted = false;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
     async function loadOrCreateProfile() {
       if (!session?.user?.id) {
-        console.warn('[Profile] No session - clearing debugProfile');
         setDebugProfile(null);
         setShowOnboarding(false);
+        setScrims([]);
         return;
       }
 
       const userId = session.user.id;
-      console.log('[Profile] Loading profile for userId:', userId);
 
       const { data: existing, error: fetchErr } = await supabase
         .from('Profiles')
@@ -111,74 +109,77 @@ useEffect(() => {
     loadOrCreateProfile();
   }, [session]);
 
-useEffect(() => {
-  if (window.location.hash.includes('error=')) {
-    console.warn('[Auth] Hash contains auth error:', window.location.hash);
-    window.history.replaceState(null, '', window.location.pathname + window.location.search);
-  }
-}, []);
+  useEffect(() => {
+    async function loadScrims() {
+      if (!session?.user?.id) return;
 
+      const { data: scrimsData, error } = await supabase
+        .from('scrims')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50);
 
-const updateProfileRegion = async (newRegion: string) => {
-  if (!debugProfile?.id) {
-    console.warn('[Profile] No profile loaded yet, cannot update region.');
-    return;
-  }
+      if (error) {
+        console.error('[Supabase] Error loading scrims:', error);
+        return;
+      }
 
-  console.log('[Profile] Updating region to:', newRegion);
+      setScrims(scrimsData || []);
+    }
 
-  const { error } = await supabase
-    .from('Profiles')
-    .update({ primary_region: newRegion })
-    .eq('id', debugProfile.id);
+    loadScrims();
+  }, [session]);
 
-  if (error) {
-    console.error('[Profile] Error updating region:', error);
-    return;
-  }
+  useEffect(() => {
+    if (window.location.hash.includes('error=')) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  }, []);
 
-  // Update local state so UI changes immediately
-  setDebugProfile({
-    ...debugProfile,
-    primary_region: newRegion,
-  });
+  const updateProfileRegion = async (newRegion: string) => {
+    if (!debugProfile?.id) return;
 
-  console.log('[Profile] Region updated in Supabase and local state.');
-};
+    const { error } = await supabase
+      .from('Profiles')
+      .update({ primary_region: newRegion })
+      .eq('id', debugProfile.id);
 
-const updateProfileDetails = async (updates: {
-  username?: string;
-  handle?: string;
-  email?: string;
-  primary_team?: string;
-}) => {
-  if (!debugProfile?.id) {
-    console.warn('[Profile] No profile loaded yet, cannot update details.');
-    return;
-  }
+    if (error) {
+      console.error('[Profile] Error updating region:', error);
+      return;
+    }
 
-  console.log('[Profile] Updating details:', updates);
+    setDebugProfile({
+      ...debugProfile,
+      primary_region: newRegion,
+    });
+  };
 
-  const { data, error } = await supabase
-    .from('Profiles')
-    .update(updates)
-    .eq('id', debugProfile.id)
-    .select('id, username, handle, email, primary_region, primary_team, created_at')
-    .single();
+  const updateProfileDetails = async (updates: {
+    username?: string;
+    handle?: string;
+    email?: string;
+    primary_team?: string;
+  }) => {
+    if (!debugProfile?.id) return;
 
-  if (error) {
-    console.error('[Profile] Error updating details:', error);
-    return;
-  }
+    const { data, error } = await supabase
+      .from('Profiles')
+      .update(updates)
+      .eq('id', debugProfile.id)
+      .select('id, username, handle, email, primary_region, primary_team, created_at')
+      .single();
 
-  setDebugProfile((prev: any) => ({
-    ...prev,
-    ...data,
-  }));
+    if (error) {
+      console.error('[Profile] Error updating details:', error);
+      return;
+    }
 
-  console.log('[Profile] Details updated in Supabase and local state.', data);
-};
-
+    setDebugProfile((prev: any) => ({
+      ...prev,
+      ...data,
+    }));
+  };
 
   const handleViewScrimDetails = (scrimId: string) => {
     setSelectedScrimId(scrimId);
@@ -188,15 +189,25 @@ const updateProfileDetails = async (updates: {
   const handleCreateScrim = () => {
     setCurrentScreen('create-scrim');
   };
-  const handleSignOut = async () => {
-  console.log('[Auth] Signing out…');
-  const { error } = await supabase.auth.signOut();
-  if (error) console.error('[Auth] Sign out error:', error);
-  else console.log('[Auth] Signed out.');
-};
 
-// Show region selection onboarding if needed
-if (showOnboarding || currentScreen === 'region-selection') {
+  const handleSignOut = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) console.error('[Auth] Sign out error:', error);
+  };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#0a0a0b] text-white flex items-center justify-center">
+        <div className="text-gray-400">Loading…</div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <AuthScreen />;
+  }
+
+  if (showOnboarding || currentScreen === 'region-selection') {
     return (
       <RegionSelection
         currentRegion={debugProfile?.primary_region}
@@ -209,6 +220,7 @@ if (showOnboarding || currentScreen === 'region-selection') {
       />
     );
   }
+
   const renderScreen = () => {
     switch (currentScreen) {
       case 'home':
@@ -220,33 +232,20 @@ if (showOnboarding || currentScreen === 'region-selection') {
       case 'scrim-details':
         return <ScrimDetails scrimId={selectedScrimId} onBack={() => setCurrentScreen('home')} />;
       case 'my-team':
-        return <MyTeam />;
-    case 'profile':
-      return (
-        <Profile
-          onNavigateToRegionSelection={() => setCurrentScreen('region-selection')}
-          profile={debugProfile}
-          onUpdateProfile={updateProfileDetails}
-        />
-      );
-
-      case 'region-selection':
-        return <RegionSelection onComplete={() => setCurrentScreen('home')} onBack={() => setCurrentScreen('profile')} />;
+        return <MyTeam profile={debugProfile} scrims={scrims} />;
+      case 'profile':
+        return (
+          <Profile
+            onNavigateToRegionSelection={() => setCurrentScreen('region-selection')}
+            profile={debugProfile}
+            scrims={scrims}
+            onUpdateProfile={updateProfileDetails}
+          />
+        );
       default:
         return <HomePage onViewScrimDetails={handleViewScrimDetails} onCreateScrim={handleCreateScrim} />;
     }
   };
-if (authLoading) {
-  return (
-    <div className="min-h-screen bg-[#0a0a0b] text-white flex items-center justify-center">
-      <div className="text-gray-400">Loading…</div>
-    </div>
-  );
-}
-
-if (!session) {
-  return <AuthScreen />;
-}
 
   const navItems = [
     { id: 'home', label: 'Home', icon: Calendar },
@@ -256,39 +255,30 @@ if (!session) {
   ];
 
   return (
-    
     <div className="min-h-screen bg-[#0a0a0b] text-white">
-<TopNav
-  onCreateScrim={handleCreateScrim}
-  profile={debugProfile}
-  isAuthed={!!session}        
-  onSignOut={handleSignOut}
-/>
-
-
-      
-      <div className="flex">
-        {/* Desktop Sidebar */}
-        <DesktopSidebar 
-          navItems={navItems} 
-          currentScreen={currentScreen} 
-          onNavigate={(screen) => setCurrentScreen(screen as any)} 
-        />
-        
-        {/* Main Content */}
-        <main className="flex-1 pb-20 lg:pb-0">
-          {renderScreen()}
-        </main>
-      </div>
-
-      {/* Mobile Tab Bar */}
-      <MobileTabBar 
-        navItems={navItems} 
-        currentScreen={currentScreen} 
-        onNavigate={(screen) => setCurrentScreen(screen as any)} 
+      <TopNav
+        onCreateScrim={handleCreateScrim}
+        profile={debugProfile}
+        isAuthed={!!session}
+        onSignOut={handleSignOut}
       />
 
-      {/* Demo Controls */}
+      <div className="flex">
+        <DesktopSidebar
+          navItems={navItems}
+          currentScreen={currentScreen}
+          onNavigate={(screen) => setCurrentScreen(screen as any)}
+        />
+
+        <main className="flex-1 pb-20 lg:pb-0">{renderScreen()}</main>
+      </div>
+
+      <MobileTabBar
+        navItems={navItems}
+        currentScreen={currentScreen}
+        onNavigate={(screen) => setCurrentScreen(screen as any)}
+      />
+
       <DemoControls onShowOnboarding={() => setShowOnboarding(true)} />
     </div>
   );

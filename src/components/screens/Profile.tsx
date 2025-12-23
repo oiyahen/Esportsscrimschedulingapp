@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   User,
   Mail,
@@ -19,6 +19,7 @@ import { Tag } from '../ui/Tag';
 interface ProfileProps {
   onNavigateToRegionSelection?: () => void;
   profile?: any | null;
+  scrims?: any[];
   onUpdateProfile?: (updates: {
     username?: string;
     handle?: string;
@@ -27,7 +28,17 @@ interface ProfileProps {
   }) => void;
 }
 
-export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile }: ProfileProps = {}) {
+type RecentMatch = {
+  opponent: string;
+  result: string;
+  score?: string;
+  date?: string;
+  tone?: 'win' | 'loss' | 'neutral';
+};
+
+export function Profile(
+  { onNavigateToRegionSelection, profile, scrims = [], onUpdateProfile }: ProfileProps = {}
+) {
   const displayUsername = profile?.username ?? 'JohnDoe';
 
   const initials = (() => {
@@ -47,7 +58,6 @@ export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile 
     return parts[0][0].toUpperCase();
   })();
 
-  // Map internal region IDs to nice labels
   const REGION_LABELS: Record<string, string> = {
     'pacific-nw': 'Pacific NW',
     'pacific-sw': 'Pacific SW',
@@ -85,7 +95,7 @@ export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile 
     }
   }
 
-  // Local edit state
+  // ---------- Local edit state ----------
   const [isEditing, setIsEditing] = useState(false);
   const [formUsername, setFormUsername] = useState(displayUsername);
   const [formHandle, setFormHandle] = useState(rawHandle ?? '');
@@ -120,19 +130,16 @@ export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile 
     const trimmedEmail = formEmail.trim();
     const trimmedTeam = formTeam.trim();
 
-    // Username required
     if (!trimmedUsername) {
       setFormError('Username is required.');
       return;
     }
 
-    // Handle: no spaces if provided
     if (trimmedHandle && /\s/.test(trimmedHandle)) {
       setFormError('Handle cannot contain spaces.');
       return;
     }
 
-    // Email: basic format check if provided
     if (trimmedEmail) {
       const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailPattern.test(trimmedEmail)) {
@@ -151,39 +158,134 @@ export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile 
     setIsEditing(false);
   };
 
-  const userStats = [
-    { label: 'Total Scrims', value: '156', icon: Target },
-    { label: 'This Month', value: '24', icon: Calendar },
-    { label: 'Avg. Per Week', value: '6', icon: Clock },
-    { label: 'Completion Rate', value: '94%', icon: Trophy },
-  ];
+  // ---------- Scrim-based stats + recent matches ----------
+  const { userStats, recentMatches } = useMemo(() => {
+    const now = new Date();
+    const month = now.getMonth();
+    const year = now.getFullYear();
+    const twentyEightDaysAgo = new Date(now.getTime() - 28 * 24 * 60 * 60 * 1000);
 
-  const recentMatches = [
-    { opponent: 'OpTic Red', result: 'Win', score: '3-1', date: 'Dec 15' },
-    { opponent: 'FaZe Academy', result: 'Loss', score: '1-3', date: 'Dec 14' },
-    { opponent: 'Team Envy', result: 'Win', score: '3-2', date: 'Dec 13' },
-  ];
+    const getScrimDate = (s: any): Date | null => {
+      const dateStr = s?.scheduled_at ?? s?.created_at ?? s?.date ?? s?.played_at;
+      if (!dateStr) return null;
+      const d = new Date(dateStr);
+      return isNaN(d.getTime()) ? null : d;
+    };
+
+    const totalScrims = Array.isArray(scrims) ? scrims.length : 0;
+
+    const scrimsThisMonth = (Array.isArray(scrims) ? scrims : []).filter((s) => {
+      const d = getScrimDate(s);
+      if (!d) return false;
+      return d.getMonth() === month && d.getFullYear() === year;
+    }).length;
+
+    const scrimsLast28Days = (Array.isArray(scrims) ? scrims : []).filter((s) => {
+      const d = getScrimDate(s);
+      if (!d) return false;
+      return d >= twentyEightDaysAgo && d <= now;
+    }).length;
+
+    const avgPerWeekRaw = scrimsLast28Days / 4;
+    const avgPerWeek =
+      scrimsLast28Days === 0 ? '0' : avgPerWeekRaw.toFixed(1).replace(/\.0$/, '');
+
+    const isCompleted = (s: any) => {
+      const raw = (s?.status ?? s?.state ?? '').toString().toLowerCase();
+      return ['completed', 'played', 'done', 'finished', 'confirmed'].includes(raw);
+    };
+
+    const completedScrims = (Array.isArray(scrims) ? scrims : []).filter(isCompleted).length;
+
+    const completionRate =
+      totalScrims > 0 ? Math.round((completedScrims / totalScrims) * 100) : 0;
+
+    const stats = [
+      { label: 'Total Scrims', value: totalScrims.toString(), icon: Target },
+      { label: 'This Month', value: scrimsThisMonth.toString(), icon: Calendar },
+      { label: 'Avg. Per Week', value: avgPerWeek, icon: Clock },
+      {
+        label: 'Completion Rate',
+        value: totalScrims > 0 ? `${completionRate}%` : '—',
+        icon: Trophy,
+      },
+    ];
+
+    const formatMatchDate = (d: Date | null) => {
+      if (!d) return '';
+      return d.toLocaleString('en-US', { month: 'short', day: 'numeric' });
+    };
+
+    const getOpponentLabel = (s: any): string => {
+      return (
+        s?.opponent_name ||
+        s?.opponent_team ||
+        s?.opponent ||
+        s?.title ||
+        s?.match_title ||
+        'Opponent team'
+      );
+    };
+
+    const getResultInfo = (s: any): { label: string; tone: 'win' | 'loss' | 'neutral' } => {
+      const raw = (s?.result ?? s?.outcome ?? s?.status ?? '').toString().toLowerCase();
+
+      if (raw.includes('win') || raw === 'w') return { label: 'Win', tone: 'win' };
+      if (raw.includes('loss') || raw === 'l') return { label: 'Loss', tone: 'loss' };
+      if (raw === 'confirmed') return { label: 'Confirmed', tone: 'neutral' };
+      if (raw === 'pending' || raw === 'open') return { label: 'Pending', tone: 'neutral' };
+      if (raw === 'cancelled' || raw === 'canceled') return { label: 'Cancelled', tone: 'neutral' };
+
+      return { label: raw ? raw[0].toUpperCase() + raw.slice(1) : 'Match', tone: 'neutral' };
+    };
+
+    const getScoreLabel = (s: any): string => {
+      if (typeof s?.score === 'string' && s.score.trim()) return s.score;
+      if (typeof s?.team_score === 'number' && typeof s?.opponent_score === 'number') {
+        return `${s.team_score}-${s.opponent_score}`;
+      }
+      if (typeof s?.teamScore === 'number' && typeof s?.opponentScore === 'number') {
+        return `${s.teamScore}-${s.opponentScore}`;
+      }
+      return '';
+    };
+
+    const sorted = [...(Array.isArray(scrims) ? scrims : [])].sort((a, b) => {
+      const da = getScrimDate(a)?.getTime() ?? 0;
+      const db = getScrimDate(b)?.getTime() ?? 0;
+      return db - da;
+    });
+
+    const recent: RecentMatch[] = sorted.slice(0, 3).map((s) => {
+      const d = getScrimDate(s);
+      const { label, tone } = getResultInfo(s);
+      return {
+        opponent: getOpponentLabel(s),
+        result: label,
+        score: getScoreLabel(s) || undefined,
+        date: formatMatchDate(d) || undefined,
+        tone,
+      };
+    });
+
+    return { userStats: stats, recentMatches: recent };
+  }, [scrims]);
 
   return (
     <div className="p-4 lg:p-8 max-w-7xl mx-auto">
-      {/* Header */}
       <div className="mb-6">
         <h1 className="text-2xl lg:text-3xl mb-1">Profile</h1>
         <p className="text-gray-400">Manage your account and preferences</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column - Profile Info */}
         <div className="lg:col-span-1 space-y-6">
-          {/* Profile Card */}
           <Card className="p-6">
             <div className="flex flex-col items-center text-center">
-              {/* Avatar */}
               <div className="w-24 h-24 bg-gradient-to-br from-purple-500 to-pink-600 rounded-full flex items-center justify-center text-3xl mb-4">
                 {initials}
               </div>
 
-              {/* Displayed name + handle */}
               {!isEditing && (
                 <>
                   <h2 className="text-xl mb-1">{displayUsername}</h2>
@@ -191,10 +293,8 @@ export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile 
                 </>
               )}
 
-              {/* Edit form */}
               {isEditing && (
                 <div className="w-full space-y-3 mb-4">
-                  {/* Username */}
                   <div className="text-left">
                     <label className="block text-xs text-gray-400 mb-1">Username</label>
                     <input
@@ -205,7 +305,6 @@ export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile 
                     />
                   </div>
 
-                  {/* Handle */}
                   <div className="text-left">
                     <label className="block text-xs text-gray-400 mb-1">Handle</label>
                     <div className="flex items-center gap-1">
@@ -220,7 +319,6 @@ export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile 
                     </div>
                   </div>
 
-                  {/* Email */}
                   <div className="text-left">
                     <label className="block text-xs text-gray-400 mb-1">Email</label>
                     <input
@@ -232,7 +330,6 @@ export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile 
                     />
                   </div>
 
-                  {/* Primary Team */}
                   <div className="text-left">
                     <label className="block text-xs text-gray-400 mb-1">Current Team</label>
                     <input
@@ -244,10 +341,7 @@ export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile 
                     />
                   </div>
 
-                  {/* Error message */}
-                  {formError && (
-                    <p className="text-xs text-red-400 mt-1">{formError}</p>
-                  )}
+                  {formError && <p className="text-xs text-red-400 mt-1">{formError}</p>}
                 </div>
               )}
 
@@ -262,16 +356,12 @@ export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile 
                 </Tag>
               </div>
 
-              {/* Edit / Cancel + Save buttons */}
               <div className="w-full space-y-2">
                 <Button
                   className="w-full"
                   onClick={() => {
-                    if (isEditing) {
-                      cancelEditing();
-                    } else {
-                      startEditing();
-                    }
+                    if (isEditing) cancelEditing();
+                    else startEditing();
                   }}
                 >
                   <Settings className="w-4 h-4" />
@@ -291,7 +381,6 @@ export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile 
             </div>
           </Card>
 
-          {/* Account Info */}
           <Card className="p-5">
             <h3 className="text-lg mb-4">Account Info</h3>
             <div className="space-y-3">
@@ -330,9 +419,7 @@ export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile 
           </Card>
         </div>
 
-        {/* Right Column - Stats & Activity */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Stats Grid */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {userStats.map((stat, index) => {
               const Icon = stat.icon;
@@ -346,37 +433,43 @@ export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile 
             })}
           </div>
 
-          {/* Recent Matches */}
           <Card className="p-6">
             <h3 className="text-xl mb-5">Recent Matches</h3>
             <div className="space-y-3">
-              {recentMatches.map((match, index) => (
-                <div
-                  key={index}
-                  className="flex items-center justify-between p-4 bg-gray-900/30 rounded-xl"
-                >
-                  <div className="flex items-center gap-4">
-                    <div
-                      className={`w-16 px-3 py-1.5 rounded-lg text-center text-sm ${
-                        match.result === 'Win'
-                          ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                          : 'bg-red-500/10 text-red-400 border border-red-500/20'
-                      }`}
-                    >
-                      {match.result}
+              {recentMatches.map((match, index) => {
+                const tone = match.tone ?? 'neutral';
+                const pill =
+                  tone === 'win'
+                    ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                    : tone === 'loss'
+                      ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                      : 'bg-gray-500/10 text-gray-300 border border-gray-500/20';
+
+                return (
+                  <div
+                    key={index}
+                    className="flex items-center justify-between p-4 bg-gray-900/30 rounded-xl"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className={`w-24 px-3 py-1.5 rounded-lg text-center text-sm border ${pill}`}>
+                        {match.result}
+                      </div>
+                      <div>
+                        <div className="mb-0.5">vs {match.opponent}</div>
+                        {match.score ? (
+                          <div className="text-sm text-gray-400">{match.score}</div>
+                        ) : (
+                          <div className="text-sm text-gray-500">—</div>
+                        )}
+                      </div>
                     </div>
-                    <div>
-                      <div className="mb-0.5">vs {match.opponent}</div>
-                      <div className="text-sm text-gray-400">{match.score}</div>
-                    </div>
+                    <div className="text-sm text-gray-500">{match.date ?? ''}</div>
                   </div>
-                  <div className="text-sm text-gray-500">{match.date}</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </Card>
 
-          {/* Settings Options */}
           <Card className="p-6">
             <h3 className="text-xl mb-5">Settings</h3>
             <div className="space-y-2">
@@ -421,3 +514,4 @@ export function Profile({ onNavigateToRegionSelection, profile, onUpdateProfile 
     </div>
   );
 }
+
