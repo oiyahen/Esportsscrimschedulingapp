@@ -12,96 +12,173 @@ import { MyTeam } from './components/screens/MyTeam';
 import { Profile } from './components/screens/Profile';
 import { RegionSelection } from './components/screens/RegionSelection';
 import { supabase } from './lib/supabaseclient';
+import type { Session } from '@supabase/supabase-js';
+import { AuthScreen } from './components/screens/AuthScreen'; 
+
 
 export default function App() {
-  const [currentScreen, setCurrentScreen] = useState<
-    'home' | 'scrim-center' | 'create-scrim' | 'scrim-details' | 'my-team' | 'profile' | 'region-selection'
-  >('home');
-  const [selectedScrimId, setSelectedScrimId] = useState<string | null>(null);
-  const [showOnboarding, setShowOnboarding] = useState(false); // Toggle this to true to show region selection
-  const [debugProfile, setDebugProfile] = useState<any | null>(null);  
-  const updateProfileRegion = async (newRegion: string) => {
-    if (!debugProfile?.id) {
-      console.warn('[Profile] No profile loaded yet, cannot update region.');
-      return;
-    }
+// 1) Your existing state
+const [currentScreen, setCurrentScreen] = useState<
+  'home' | 'scrim-center' | 'create-scrim' | 'scrim-details' | 'my-team' | 'profile' | 'region-selection'
+>('home');
+const [selectedScrimId, setSelectedScrimId] = useState<string | null>(null);
+const [showOnboarding, setShowOnboarding] = useState(false); // Toggle this to true to show region selection
+const [debugProfile, setDebugProfile] = useState<any | null>(null);
+const [session, setSession] = useState<Session | null>(null);
+const [authLoading, setAuthLoading] = useState(true);
 
-    console.log('[Profile] Updating region to:', newRegion);
+  // AUTH: init + subscribe (single source of truth)
+useEffect(() => {
+  let isMounted = true;
 
-    const { error } = await supabase
-      .from('Profiles')
-      .update({ primary_region: newRegion })
-      .eq('id', debugProfile.id);
+  const init = async () => {
+    console.log('[Auth] Checking current session…');
+    const { data, error } = await supabase.auth.getSession();
+    if (error) console.error('[Auth] Error fetching session:', error);
 
-    if (error) {
-      console.error('[Profile] Error updating region:', error);
-      return;
-    }
+    if (!isMounted) return;
 
-
-    // Update local state so UI changes immediately
-    setDebugProfile({
-      ...debugProfile,
-      primary_region: newRegion,
-    });
-
-    console.log('[Profile] Region updated in Supabase and local state.');
+    setSession(data.session ?? null);
+    setAuthLoading(false);
   };
 
-  const updateProfileDetails = async (updates: {
-    username?: string;
-    handle?: string;
-    email?: string;
-    primary_team?: string;
-  }) => {
-    if (!debugProfile?.id) {
-      console.warn('[Profile] No profile loaded yet, cannot update details.');
-      return;
-    }
+  init();
 
-    console.log('[Profile] Updating details:', updates);
+  const { data: sub } = supabase.auth.onAuthStateChange((event, newSession) => {
+    console.log('[Auth] Auth state changed:', event);
+    setSession(newSession);
+  });
 
-    const { data, error } = await supabase
-      .from('Profiles')
-      .update(updates)
-      .eq('id', debugProfile.id)
-      .select('id, username, handle, email, primary_region, primary_team, created_at')
-      .single();
-
-    if (error) {
-      console.error('[Profile] Error updating details:', error);
-      return;
-    }
- setDebugProfile((prev: any) => ({
-      ...prev,
-      ...data,
-    }));
-
-    console.log('[Profile] Details updated in Supabase and local state.', data);
+  return () => {
+    isMounted = false;
+    sub.subscription.unsubscribe();
   };
+}, []);
 
-  // Test Supabase connection once on app load
-  useEffect(() => {
-    async function testSupabaseConnection() {
-      console.log('[Supabase] Testing connection to profiles…');
+useEffect(() => {
+    async function loadOrCreateProfile() {
+      if (!session?.user?.id) {
+        console.warn('[Profile] No session - clearing debugProfile');
+        setDebugProfile(null);
+        setShowOnboarding(false);
+        return;
+      }
 
-      const { data, error } = await supabase
+      const userId = session.user.id;
+      console.log('[Profile] Loading profile for userId:', userId);
+
+      const { data: existing, error: fetchErr } = await supabase
         .from('Profiles')
         .select('id, username, handle, email, primary_region, primary_team, created_at')
-        .limit(5);
+        .eq('id', userId)
+        .maybeSingle();
 
-      if (error) {
-        console.error('[Supabase] Error talking to Supabase:', error);
-      } else {
-        console.log('[Supabase] Connection OK. Sample rows:', data);
-        if (data && data.length > 0) {
-          setDebugProfile(data[0]); // 👈 save first profile
-        }
+      if (fetchErr) {
+        console.error('[Profile] Error fetching profile:', fetchErr);
+        return;
       }
+
+      if (existing) {
+        setDebugProfile(existing);
+        if (!existing.primary_region) setShowOnboarding(true);
+        return;
+      }
+
+      const insertPayload = {
+        id: userId,
+        email: session.user.email ?? null,
+        username: session.user.email?.split('@')[0] ?? 'New User',
+        handle: null,
+        primary_region: null,
+        primary_team: null,
+      };
+
+      const { data: created, error: insertErr } = await supabase
+        .from('Profiles')
+        .insert(insertPayload)
+        .select('id, username, handle, email, primary_region, primary_team, created_at')
+        .single();
+
+      if (insertErr) {
+        console.error('[Profile] Error creating profile:', insertErr);
+        return;
+      }
+
+      setDebugProfile(created);
+      setShowOnboarding(true);
     }
 
-    testSupabaseConnection();
-  }, []);
+    loadOrCreateProfile();
+  }, [session]);
+
+useEffect(() => {
+  if (window.location.hash.includes('error=')) {
+    console.warn('[Auth] Hash contains auth error:', window.location.hash);
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+}, []);
+
+
+const updateProfileRegion = async (newRegion: string) => {
+  if (!debugProfile?.id) {
+    console.warn('[Profile] No profile loaded yet, cannot update region.');
+    return;
+  }
+
+  console.log('[Profile] Updating region to:', newRegion);
+
+  const { error } = await supabase
+    .from('Profiles')
+    .update({ primary_region: newRegion })
+    .eq('id', debugProfile.id);
+
+  if (error) {
+    console.error('[Profile] Error updating region:', error);
+    return;
+  }
+
+  // Update local state so UI changes immediately
+  setDebugProfile({
+    ...debugProfile,
+    primary_region: newRegion,
+  });
+
+  console.log('[Profile] Region updated in Supabase and local state.');
+};
+
+const updateProfileDetails = async (updates: {
+  username?: string;
+  handle?: string;
+  email?: string;
+  primary_team?: string;
+}) => {
+  if (!debugProfile?.id) {
+    console.warn('[Profile] No profile loaded yet, cannot update details.');
+    return;
+  }
+
+  console.log('[Profile] Updating details:', updates);
+
+  const { data, error } = await supabase
+    .from('Profiles')
+    .update(updates)
+    .eq('id', debugProfile.id)
+    .select('id, username, handle, email, primary_region, primary_team, created_at')
+    .single();
+
+  if (error) {
+    console.error('[Profile] Error updating details:', error);
+    return;
+  }
+
+  setDebugProfile((prev: any) => ({
+    ...prev,
+    ...data,
+  }));
+
+  console.log('[Profile] Details updated in Supabase and local state.', data);
+};
+
 
   const handleViewScrimDetails = (scrimId: string) => {
     setSelectedScrimId(scrimId);
@@ -111,22 +188,27 @@ export default function App() {
   const handleCreateScrim = () => {
     setCurrentScreen('create-scrim');
   };
+  const handleSignOut = async () => {
+  console.log('[Auth] Signing out…');
+  const { error } = await supabase.auth.signOut();
+  if (error) console.error('[Auth] Sign out error:', error);
+  else console.log('[Auth] Signed out.');
+};
 
 // Show region selection onboarding if needed
 if (showOnboarding || currentScreen === 'region-selection') {
-  return (
-    <RegionSelection
-      currentRegion={debugProfile?.primary_region}
-      onRegionSelected={(newRegion) => updateProfileRegion(newRegion)}
-      onComplete={() => {
-        setShowOnboarding(false);
-        setCurrentScreen('home');
-      }}
-      onBack={() => setCurrentScreen('profile')}
-    />
-  );
-}
-
+    return (
+      <RegionSelection
+        currentRegion={debugProfile?.primary_region}
+        onRegionSelected={(newRegion) => updateProfileRegion(newRegion)}
+        onComplete={() => {
+          setShowOnboarding(false);
+          setCurrentScreen('home');
+        }}
+        onBack={() => setCurrentScreen('profile')}
+      />
+    );
+  }
   const renderScreen = () => {
     switch (currentScreen) {
       case 'home':
@@ -154,6 +236,17 @@ if (showOnboarding || currentScreen === 'region-selection') {
         return <HomePage onViewScrimDetails={handleViewScrimDetails} onCreateScrim={handleCreateScrim} />;
     }
   };
+if (authLoading) {
+  return (
+    <div className="min-h-screen bg-[#0a0a0b] text-white flex items-center justify-center">
+      <div className="text-gray-400">Loading…</div>
+    </div>
+  );
+}
+
+if (!session) {
+  return <AuthScreen />;
+}
 
   const navItems = [
     { id: 'home', label: 'Home', icon: Calendar },
@@ -163,8 +256,16 @@ if (showOnboarding || currentScreen === 'region-selection') {
   ];
 
   return (
+    
     <div className="min-h-screen bg-[#0a0a0b] text-white">
-          <TopNav onCreateScrim={handleCreateScrim} profile={debugProfile} />
+<TopNav
+  onCreateScrim={handleCreateScrim}
+  profile={debugProfile}
+  isAuthed={!!session}        
+  onSignOut={handleSignOut}
+/>
+
+
       
       <div className="flex">
         {/* Desktop Sidebar */}
