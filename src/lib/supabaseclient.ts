@@ -1,21 +1,19 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from '@supabase/supabase-js';
 
-// Read Vite env vars and defensively trim them to avoid leading/trailing space issues
-const rawUrl = (import.meta.env.VITE_SUPABASE_URL as string) ?? "";
-const rawAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string) ?? "";
+const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL ?? '').trim();
+const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim();
 
-const supabaseUrl = rawUrl.trim();
-const supabaseAnonKey = rawAnonKey.trim();
-
-console.log("[Supabase] URL:", supabaseUrl);
-console.log("[Supabase] anon key present:", !!supabaseAnonKey);
+if (import.meta.env.DEV) {
+  console.log('[Supabase] URL present:', !!supabaseUrl);
+  console.log('[Supabase] anon key present:', !!supabaseAnonKey);
+}
 
 if (!supabaseUrl) {
-	throw new Error("VITE_SUPABASE_URL is not set or is empty. Check your .env file.");
+  throw new Error('VITE_SUPABASE_URL is not set or is empty. Check Vercel Env Vars + redeploy.');
 }
 
 if (!supabaseAnonKey) {
-	throw new Error("VITE_SUPABASE_ANON_KEY is not set or is empty. Check your .env file.");
+  throw new Error('VITE_SUPABASE_ANON_KEY is not set or is empty. Check Vercel Env Vars + redeploy.');
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
