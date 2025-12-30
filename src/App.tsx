@@ -15,10 +15,10 @@ import { supabase } from './lib/supabaseclient';
 import type { Session } from '@supabase/supabase-js';
 import { AuthScreen } from './components/screens/AuthScreen';
 
+type Screen = 'home' | 'scrim-center' | 'create-scrim' | 'scrim-details' | 'my-team' | 'profile';
+
 export default function App() {
-  const [currentScreen, setCurrentScreen] = useState<
-    'home' | 'scrim-center' | 'create-scrim' | 'scrim-details' | 'my-team' | 'profile' | 'region-selection'
-  >('home');
+  const [currentScreen, setCurrentScreen] = useState<Screen>('home');
 
   const [selectedScrimId, setSelectedScrimId] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -28,6 +28,12 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
 
   const [scrims, setScrims] = useState<any[]>([]);
+  const [profileScreen, setProfileScreen] = useState<'main' | 'region'>('main');
+
+  const navigate = (screen: Screen) => {
+    setCurrentScreen(screen);
+    if (screen !== 'profile') setProfileScreen('main');
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -139,10 +145,7 @@ export default function App() {
   const updateProfileRegion = async (newRegion: string) => {
     if (!debugProfile?.id) return;
 
-    const { error } = await supabase
-      .from('Profiles')
-      .update({ primary_region: newRegion })
-      .eq('id', debugProfile.id);
+    const { error } = await supabase.from('Profiles').update({ primary_region: newRegion }).eq('id', debugProfile.id);
 
     if (error) {
       console.error('[Profile] Error updating region:', error);
@@ -207,7 +210,8 @@ export default function App() {
     return <AuthScreen />;
   }
 
-  if (showOnboarding || currentScreen === 'region-selection') {
+  // Onboarding-only Region Selection (NOT a tab / NOT a top-level screen)
+  if (showOnboarding) {
     return (
       <RegionSelection
         currentRegion={debugProfile?.primary_region}
@@ -216,7 +220,10 @@ export default function App() {
           setShowOnboarding(false);
           setCurrentScreen('home');
         }}
-        onBack={() => setCurrentScreen('profile')}
+        onBack={() => {
+          setShowOnboarding(false);
+          setCurrentScreen('profile');
+        }}
       />
     );
   }
@@ -225,23 +232,36 @@ export default function App() {
     switch (currentScreen) {
       case 'home':
         return <HomePage onViewScrimDetails={handleViewScrimDetails} onCreateScrim={handleCreateScrim} />;
+
       case 'scrim-center':
         return <ScrimCenter onViewScrimDetails={handleViewScrimDetails} onCreateScrim={handleCreateScrim} />;
+
       case 'create-scrim':
         return <CreateScrimSlot onClose={() => setCurrentScreen('scrim-center')} />;
+
       case 'scrim-details':
         return <ScrimDetails scrimId={selectedScrimId} onBack={() => setCurrentScreen('home')} />;
+
       case 'my-team':
         return <MyTeam profile={debugProfile} scrims={scrims} />;
+
       case 'profile':
-        return (
+        return profileScreen === 'region' ? (
+          <RegionSelection
+            currentRegion={debugProfile?.primary_region}
+            onRegionSelected={(newRegion) => updateProfileRegion(newRegion)}
+            onComplete={() => setProfileScreen('main')}
+            onBack={() => setProfileScreen('main')}
+          />
+        ) : (
           <Profile
-            onNavigateToRegionSelection={() => setCurrentScreen('region-selection')}
+            onNavigateToRegionSelection={() => setProfileScreen('region')}
             profile={debugProfile}
             scrims={scrims}
             onUpdateProfile={updateProfileDetails}
           />
         );
+
       default:
         return <HomePage onViewScrimDetails={handleViewScrimDetails} onCreateScrim={handleCreateScrim} />;
     }
@@ -256,28 +276,15 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0a0a0b] text-white">
-      <TopNav
-        onCreateScrim={handleCreateScrim}
-        profile={debugProfile}
-        isAuthed={!!session}
-        onSignOut={handleSignOut}
-      />
+      <TopNav onCreateScrim={handleCreateScrim} profile={debugProfile} isAuthed={!!session} onSignOut={handleSignOut} />
 
       <div className="flex">
-        <DesktopSidebar
-          navItems={navItems}
-          currentScreen={currentScreen}
-          onNavigate={(screen) => setCurrentScreen(screen as any)}
-        />
+        <DesktopSidebar navItems={navItems} currentScreen={currentScreen} onNavigate={(screen) => navigate(screen as Screen)} />
 
         <main className="flex-1 pb-20 lg:pb-0">{renderScreen()}</main>
       </div>
 
-      <MobileTabBar
-        navItems={navItems}
-        currentScreen={currentScreen}
-        onNavigate={(screen) => setCurrentScreen(screen as any)}
-      />
+      <MobileTabBar navItems={navItems} currentScreen={currentScreen} onNavigate={(screen) => navigate(screen as Screen)} />
 
       <DemoControls onShowOnboarding={() => setShowOnboarding(true)} />
     </div>
