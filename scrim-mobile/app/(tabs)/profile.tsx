@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { SafeAreaView, ScrollView, View, Text, Pressable, StyleSheet } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context'
+import { ScrollView, View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useNavigation } from 'expo-router';
 import { supabase } from '../../lib/supabase';
@@ -91,21 +92,19 @@ export default function ProfileScreen() {
     [scrimsCount, confirmedCount, confirmedHours]
   );
 
- const settingsItems = useMemo(
-  () => [
-    { icon: 'people-outline' as const, label: 'Teams', color: '#fbbf24' }, // NEW placeholder
-    { icon: 'notifications-outline' as const, label: 'Notifications', color: '#60a5fa' },
-    { icon: 'shield-checkmark-outline' as const, label: 'Privacy & Security', color: '#a78bfa' },
-    { icon: 'location-outline' as const, label: 'Change Region', color: '#34d399' },
-    { icon: 'log-out-outline' as const, label: 'Sign Out', color: '#f87171' },
-  ],
-  []
-);
-
+  const settingsItems = useMemo(
+    () => [
+      { icon: 'people-outline' as const, label: 'Teams', color: '#fbbf24' },
+      { icon: 'settings-outline' as const, label: 'General Settings', color: '#60a5fa' },
+      { icon: 'shield-checkmark-outline' as const, label: 'Privacy & Security', color: '#a78bfa' },
+      { icon: 'location-outline' as const, label: 'Change Region', color: '#34d399' },
+      { icon: 'log-out-outline' as const, label: 'Sign Out', color: '#f87171' },
+    ],
+    []
+  );
 
   const loadTeamScrimStats = async (teamId: string) => {
     try {
-      // Pull scrims hosted by this team (latest 200 is plenty for now)
       const { data, error } = await supabase
         .from('scrims')
         .select('id, host_team_id, status, start_time, end_time, duration_minutes')
@@ -132,7 +131,6 @@ export default function ProfileScreen() {
       setConfirmedHours(Math.round((confirmedMinutes / 60) * 10) / 10);
     } catch (e) {
       console.log('Scrim stats load error:', e);
-      // Don’t blank UI aggressively; just set safe defaults
       setScrimsCount(0);
       setConfirmedCount(0);
       setConfirmedHours(0);
@@ -176,10 +174,8 @@ export default function ProfileScreen() {
 
         if (!tErr) tName = t?.name ?? null;
 
-        // Load stats for this team
         await loadTeamScrimStats(p.primary_team_id);
       } else {
-        // No team set yet
         setScrimsCount(0);
         setConfirmedCount(0);
         setConfirmedHours(0);
@@ -199,7 +195,6 @@ export default function ProfileScreen() {
     }
   };
 
-  // Initial load + refresh on auth change
   useEffect(() => {
     loadProfile();
 
@@ -213,7 +208,6 @@ export default function ProfileScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Refresh whenever this screen becomes focused again (returning from /region)
   useEffect(() => {
     const unsub = navigation.addListener('focus', () => {
       loadProfile();
@@ -236,12 +230,20 @@ export default function ProfileScreen() {
     }
 
     if (label === 'Teams') {
-  router.push('/teams');
-  return;
-}
+      router.push('/teams');
+      return;
+    }
 
+    if (label === 'General Settings') {
+      router.push('/settings');
+      return;
+    }
 
     console.log('TODO:', label);
+  };
+
+  const onPressEditProfile = () => {
+    router.push('/edit-profile');
   };
 
   return (
@@ -258,11 +260,23 @@ export default function ProfileScreen() {
             <Text style={styles.handle}>{profile.handle}</Text>
           </View>
 
-          {loadingProfile ? (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>Loading</Text>
-            </View>
-          ) : null}
+          <View style={styles.headerRight}>
+            {loadingProfile ? (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>Loading</Text>
+              </View>
+            ) : null}
+
+            <Pressable
+              onPress={onPressEditProfile}
+              hitSlop={10}
+              style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
+              accessibilityRole="button"
+              accessibilityLabel="Edit profile"
+            >
+              <Ionicons name="settings-outline" size={20} color="#94a3b8" />
+            </Pressable>
+          </View>
         </View>
 
         {/* Profile card */}
@@ -350,6 +364,24 @@ const styles = StyleSheet.create({
   username: { color: '#e5e7eb', fontSize: 18, fontWeight: '700' },
   handle: { color: '#94a3b8', fontSize: 13, marginTop: 2 },
 
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+
+  iconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0b1220',
+    borderWidth: 1,
+    borderColor: '#111827',
+  },
+  iconButtonPressed: { opacity: 0.85 },
+
   badge: {
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -389,7 +421,13 @@ const styles = StyleSheet.create({
   statValue: { color: '#e5e7eb', fontSize: 18, fontWeight: '700' },
   statLabel: { color: '#94a3b8', fontSize: 12, marginTop: 4 },
 
-  sectionTitle: { color: '#e5e7eb', fontSize: 14, fontWeight: '700', marginTop: 18, marginBottom: 10 },
+  sectionTitle: {
+    color: '#e5e7eb',
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: 18,
+    marginBottom: 10,
+  },
 
   settingsCard: {
     backgroundColor: '#0b1220',

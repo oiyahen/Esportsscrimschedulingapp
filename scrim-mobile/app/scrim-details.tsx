@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { SafeAreaView, ScrollView, View, Text, Pressable, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context'
+import { ScrollView, View, Text, Pressable, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, router } from 'expo-router';
 import { supabase } from '../lib/supabase';
@@ -22,7 +23,7 @@ const REGION_LABELS: Record<string, string> = {
 };
 
 const REGION_ALIASES: Record<string, RegionId> = {
-  'pacfic-nw': 'pacific-nw',
+  'pacfic-nw': 'pacific-nw', // common typo
   pacificnw: 'pacific-nw',
   'pacific-northwest': 'pacific-nw',
 };
@@ -51,19 +52,26 @@ function fmtDate(iso: string, tz?: string | null) {
 function minutesBetween(startIso: string, endIso: string) {
   const s = new Date(startIso).getTime();
   const e = new Date(endIso).getTime();
-  const mins = Math.max(0, Math.round((e - s) / 60000));
-  return mins;
+  if (Number.isNaN(s) || Number.isNaN(e)) return 0;
+  return Math.max(0, Math.round((e - s) / 60000));
 }
 
 function scrimTypeLabel(scrimType?: string | null, modes?: string[] | null) {
-  if (scrimType === 'hp-only') return 'Hardpoints';
-  if (scrimType === 'snd-only') return 'Search';
-  if (scrimType === 'third-only') return '3rd Mode';
-  if (scrimType === 'all-respawns') return 'Respawns';
-  if (scrimType === 'mixed') return 'Custom';
-  if (modes?.includes('hp') && modes.length === 1) return 'Hardpoints';
-  if (modes?.includes('snd') && modes.length === 1) return 'Search';
-  if (modes?.includes('control') && modes.length === 1) return '3rd Mode';
+  const t = (scrimType ?? '').toLowerCase();
+
+  // Prefer scrim_type
+  if (t === 'hp-only') return 'Hardpoint';
+  if (t === 'snd-only') return 'S&D';
+  if (t === 'third-only') return '3rd Mode';
+  if (t === 'all-respawns') return 'Respawns';
+  if (t === 'mixed') return 'Respawns'; // legacy catch; you can change later
+
+  // Fallback from modes array
+  const m = (modes ?? []).map((x) => String(x).toLowerCase());
+  if (m.includes('hp') || m.includes('hardpoint')) return 'Hardpoint';
+  if (m.includes('snd') || m.includes('search') || m.includes('search and destroy')) return 'S&D';
+  if (m.includes('control') || m.includes('third') || m.includes('3rd')) return '3rd Mode';
+
   return 'Scrim';
 }
 
@@ -77,6 +85,8 @@ function statusLabel(status?: string | null) {
   return status;
 }
 
+// Match Scrim Center / Details mapping you settled on:
+// Open = Blue, Pending = Yellow, Confirmed = Green, Cancelled = Red
 function statusColor(status?: string | null) {
   const s = (status ?? '').toLowerCase();
   if (s === 'open') return { bg: 'rgba(59,130,246,0.15)', fg: '#60a5fa', bd: '#1d4ed8' };
@@ -140,7 +150,7 @@ export default function ScrimDetailsScreen() {
       const user = sessionData.session?.user;
       setMyUserId(user?.id ?? null);
 
-      // ✅ SAFE: profile row may not exist yet
+      // Profile row may not exist — safe
       if (user?.id) {
         const { data: p, error: pErr } = await supabase
           .from('Profiles')
@@ -149,6 +159,9 @@ export default function ScrimDetailsScreen() {
           .maybeSingle();
 
         if (!pErr) setMyTeamId(p?.primary_team_id ?? null);
+        else setMyTeamId(null);
+      } else {
+        setMyTeamId(null);
       }
 
       const { data, error } = await supabase
@@ -181,12 +194,19 @@ export default function ScrimDetailsScreen() {
     load();
   }, [load]);
 
+  const scrimStatus = (scrim?.status ?? '').toLowerCase();
+
   const isHostTeam = useMemo(() => {
     if (!scrim || !myTeamId) return false;
     return scrim.host_team_id === myTeamId;
   }, [scrim, myTeamId]);
 
-  const scrimStatus = (scrim?.status ?? '').toLowerCase();
+  const isOpponentTeam = useMemo(() => {
+    if (!scrim || !myTeamId) return false;
+    return !!scrim.opponent_team_id && scrim.opponent_team_id === myTeamId;
+  }, [scrim, myTeamId]);
+
+  const isInScrim = useMemo(() => isHostTeam || isOpponentTeam, [isHostTeam, isOpponentTeam]);
 
   const isTakenByOtherTeam = useMemo(() => {
     if (!scrim || !myTeamId) return false;
@@ -201,22 +221,19 @@ export default function ScrimDetailsScreen() {
     if (isHostTeam) return false;
     if (scrimStatus !== 'open') return false;
     if (isTakenByOtherTeam) return false;
-    return !scrim.opponent_team_id || scrim.opponent_team_id === myTeamId;
+    // Accept only if untaken
+    return !scrim.opponent_team_id;
   }, [scrim, myTeamId, isHostTeam, scrimStatus, isTakenByOtherTeam]);
-
-  const canHostAcceptDecline = useMemo(() => {
-    if (!scrim) return false;
-    return isHostTeam && scrimStatus === 'pending';
-  }, [scrim, isHostTeam, scrimStatus]);
 
   const canCancel = useMemo(() => {
     if (!scrim) return false;
-    return isHostTeam && scrimStatus !== 'cancelled' && scrimStatus !== 'canceled';
+    const s = scrimStatus;
+    return isHostTeam && s !== 'cancelled' && s !== 'canceled';
   }, [scrim, isHostTeam, scrimStatus]);
 
   const regionLabel = useMemo(() => {
     const raw = normalizeRegion(scrim?.region);
-    const key = REGION_ALIASES[raw] ?? raw;
+    const key = REGION_ALIASES[raw] ?? (raw as any);
     return REGION_LABELS[key as RegionId] || key || '—';
   }, [scrim?.region]);
 
@@ -227,14 +244,17 @@ export default function ScrimDetailsScreen() {
 
   const durationLabel = useMemo(() => {
     if (!scrim?.start_time || !scrim?.end_time) return '—';
-    const mins = scrim.duration_minutes ?? minutesBetween(scrim.start_time, scrim.end_time);
+    const computed = minutesBetween(scrim.start_time, scrim.end_time);
+    const mins = computed || scrim.duration_minutes || 0;
     if (!mins) return '—';
+
     const hrs = mins / 60;
     const rounded = Math.round(hrs * 10) / 10;
-    return Number.isInteger(rounded) ? `${rounded}h` : `${rounded}h`;
+    return `${rounded}h`;
   }, [scrim?.duration_minutes, scrim?.start_time, scrim?.end_time]);
 
   const hostName = useMemo(() => scrim?.host_team?.name ?? 'Unknown Team', [scrim?.host_team?.name]);
+
   const oppName = useMemo(() => {
     if (scrim?.opp_team?.name) return scrim.opp_team.name;
     if (scrim?.opponent_team_id) return 'Opponent';
@@ -249,7 +269,6 @@ export default function ScrimDetailsScreen() {
       setActing(true);
       setErrorMsg(null);
 
-      // Only succeed if it's still open AND opponent_team_id is NULL
       const { data: updated, error } = await supabase
         .from('scrims')
         .update({
@@ -265,7 +284,6 @@ export default function ScrimDetailsScreen() {
 
       if (error) throw error;
 
-      // If no row updated, someone else took it (or status changed)
       if (!updated?.id) {
         Alert.alert('Already taken', 'Another team accepted this scrim before you.');
         await load();
@@ -276,52 +294,6 @@ export default function ScrimDetailsScreen() {
     } catch (e: any) {
       console.log('[ScrimDetails] accept open error:', e);
       setErrorMsg(e?.message ?? 'Failed to accept scrim.');
-    } finally {
-      setActing(false);
-    }
-  };
-
-  const doHostConfirm = async () => {
-    if (!scrimId) return;
-
-    try {
-      setActing(true);
-      setErrorMsg(null);
-
-      const { error } = await supabase
-        .from('scrims')
-        .update({ status: 'confirmed', updated_at: new Date().toISOString() })
-        .eq('id', scrimId);
-
-      if (error) throw error;
-
-      await load();
-    } catch (e: any) {
-      console.log('[ScrimDetails] host confirm error:', e);
-      setErrorMsg(e?.message ?? 'Failed to confirm scrim.');
-    } finally {
-      setActing(false);
-    }
-  };
-
-  const doHostDecline = async () => {
-    if (!scrimId) return;
-
-    try {
-      setActing(true);
-      setErrorMsg(null);
-
-      const { error } = await supabase
-        .from('scrims')
-        .update({ status: 'open', opponent_team_id: null, updated_at: new Date().toISOString() })
-        .eq('id', scrimId);
-
-      if (error) throw error;
-
-      await load();
-    } catch (e: any) {
-      console.log('[ScrimDetails] host decline error:', e);
-      setErrorMsg(e?.message ?? 'Failed to decline.');
     } finally {
       setActing(false);
     }
@@ -435,31 +407,48 @@ export default function ScrimDetailsScreen() {
             <View style={styles.actionsCard}>
               {errorMsg ? <Text style={styles.error}>{errorMsg}</Text> : null}
 
-              {isTakenByOtherTeam ? (
+              {!myTeamId ? (
+                <View style={styles.infoBox}>
+                  <Text style={styles.infoText}>
+                    You need a team to accept scrims. Create a team or set a primary team in Profile → Teams.
+                  </Text>
+
+                  <Pressable
+                    disabled={acting}
+                    onPress={() => router.push('/create-team')}
+                    style={[styles.btnPrimary, acting && { opacity: 0.7 }]}
+                  >
+                    <Text style={styles.btnPrimaryText}>Create Team</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+
+              {myTeamId && isTakenByOtherTeam ? (
                 <View style={styles.infoBox}>
                   <Text style={styles.infoText}>This scrim slot has already been taken by another team.</Text>
                 </View>
               ) : null}
 
-              {canAcceptOpen ? (
-                <Pressable disabled={acting} onPress={doAcceptOpen} style={[styles.btnPrimary, acting && { opacity: 0.7 }]}>
+              {/* Open scrim, not host, has team, untaken */}
+              {myTeamId && canAcceptOpen ? (
+                <Pressable
+                  disabled={acting}
+                  onPress={doAcceptOpen}
+                  style={[styles.btnPrimary, acting && { opacity: 0.7 }]}
+                >
                   {acting ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnPrimaryText}>Accept Scrim</Text>}
                 </Pressable>
               ) : null}
 
-              {canHostAcceptDecline ? (
-                <View style={{ flexDirection: 'row', gap: 10 }}>
-                  <Pressable disabled={acting} onPress={doHostDecline} style={[styles.btnGhost, acting && { opacity: 0.7 }]}>
-                    <Text style={styles.btnGhostText}>Decline</Text>
-                  </Pressable>
-
-                  <Pressable disabled={acting} onPress={doHostConfirm} style={[styles.btnPrimary, acting && { opacity: 0.7 }]}>
-                    {acting ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnPrimaryText}>Confirm</Text>}
-                  </Pressable>
+              {/* Confirmed & I'm involved — just informational (no CTA needed yet) */}
+              {myTeamId && scrimStatus === 'confirmed' && isInScrim ? (
+                <View style={styles.infoBox}>
+                  <Text style={styles.infoText}>This scrim is confirmed. You’re in the match.</Text>
                 </View>
               ) : null}
 
-              {canCancel ? (
+              {/* Host-only cancel */}
+              {myTeamId && canCancel ? (
                 <Pressable disabled={acting} onPress={doCancel} style={[styles.btnDanger, acting && { opacity: 0.7 }]}>
                   <Text style={styles.btnDangerText}>Cancel Scrim</Text>
                 </Pressable>
@@ -536,22 +525,12 @@ const styles = StyleSheet.create({
     borderColor: '#111827',
     borderRadius: 12,
     padding: 12,
+    gap: 10,
   },
   infoText: { color: '#9ca3af', fontSize: 12, fontWeight: '700' },
 
-  btnPrimary: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', backgroundColor: '#3b82f6' },
+  btnPrimary: { paddingVertical: 14, borderRadius: 12, alignItems: 'center', backgroundColor: '#3b82f6' },
   btnPrimaryText: { color: '#ffffff', fontWeight: '900' },
-
-  btnGhost: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    backgroundColor: '#0b1220',
-    borderWidth: 1,
-    borderColor: '#111827',
-  },
-  btnGhostText: { color: '#e5e7eb', fontWeight: '900' },
 
   btnDanger: {
     paddingVertical: 14,

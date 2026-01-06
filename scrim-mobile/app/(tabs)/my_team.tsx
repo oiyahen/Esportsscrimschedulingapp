@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { SafeAreaView, ScrollView, View, Text, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context'
+import { ScrollView, View, Text, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
+import { useFocusEffect, router } from 'expo-router';
 
 type RegionId =
   | 'pacific-nw'
@@ -143,7 +145,7 @@ export default function MyTeamScreen() {
     return 'offline';
   };
 
-  const loadMyTeam = async () => {
+  const loadMyTeam = useCallback(async () => {
     try {
       setLoading(true);
       setErrorMsg(null);
@@ -165,7 +167,7 @@ export default function MyTeamScreen() {
         .from('Profiles')
         .select('id, username, handle, primary_team_id, primary_region')
         .eq('id', user.id)
-        .single();
+        .maybeSingle();
 
       if (pErr) throw pErr;
 
@@ -185,12 +187,19 @@ export default function MyTeamScreen() {
         .from('teams')
         .select('id, owner_id, name, tag, region, time_zone, created_at')
         .eq('id', teamId)
-        .single();
+        .maybeSingle();
 
       if (tErr) throw tErr;
 
       const teamRow = (t ?? null) as TeamRow | null;
       setTeam(teamRow);
+
+      if (!teamRow?.id) {
+        setMembers([]);
+        setStats({ scrimsThisWeek: 0, confirmed: 0, pending: 0, cancelled: 0 });
+        setLoading(false);
+        return;
+      }
 
       const ownerId = teamRow?.owner_id ?? null;
 
@@ -217,9 +226,7 @@ export default function MyTeamScreen() {
           ...teamMembers,
         ];
       } else if (ownerId) {
-        // ✅ If owner exists in team_members but is "left/removed", still keep them visible in UI
-        // We'll not rely on the filter to keep them.
-        // Also move owner to top for display.
+        // Move owner to top for display
         teamMembers = [
           ...teamMembers.filter((m) => m.user_id === ownerId),
           ...teamMembers.filter((m) => m.user_id !== ownerId),
@@ -246,7 +253,6 @@ export default function MyTeamScreen() {
       const membersUI: MemberUI[] = teamMembers
         .filter((m) => {
           const st = (m.status ?? '').toLowerCase();
-          // ✅ Always show owner even if status is left/removed
           if (ownerId && m.user_id === ownerId) return true;
           return st !== 'removed' && st !== 'left';
         })
@@ -268,7 +274,7 @@ export default function MyTeamScreen() {
           return {
             id: m.user_id,
             name: display,
-            role: '—', // placeholder until role exists in schema
+            role: '—',
             status: mapTeamMemberStatusToPresence(m.status),
             initials: initialsFromName(display),
           };
@@ -315,7 +321,7 @@ export default function MyTeamScreen() {
       setStats({ scrimsThisWeek: 0, confirmed: 0, pending: 0, cancelled: 0 });
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadMyTeam();
@@ -327,10 +333,15 @@ export default function MyTeamScreen() {
     return () => {
       sub.subscription.unsubscribe();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadMyTeam]);
 
-  const maxMembers = 5; // placeholder; later derive from team/tier settings
+  useFocusEffect(
+    useCallback(() => {
+      loadMyTeam();
+    }, [loadMyTeam])
+  );
+
+  const maxMembers = 5;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -430,10 +441,10 @@ export default function MyTeamScreen() {
               </View>
             </View>
 
-            {/* Invite Button (placeholder for now) */}
+            {/* Invite Button */}
             <Pressable
               style={({ pressed }) => [styles.inviteButton, pressed && styles.inviteButtonPressed]}
-              onPress={() => console.log('TODO: invite team member')}
+              onPress={() => router.push('/invite-member')}
             >
               <Ionicons name="person-add" size={20} color="#ffffff" />
               <Text style={styles.inviteButtonText}>Invite Team Member</Text>
