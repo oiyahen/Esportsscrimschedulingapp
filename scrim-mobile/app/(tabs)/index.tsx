@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import {
-  SafeAreaView,
   ScrollView,
   View,
   Text,
@@ -10,7 +10,7 @@ import {
   RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 
 type ScrimRow = {
@@ -111,8 +111,11 @@ export default function HomeScreen() {
   const [myTeamId, setMyTeamId] = useState<string | null>(null);
   const [scrims, setScrims] = useState<ScrimRow[]>([]);
 
-  // ✅ NEW: selected date drives the list + week/day interactions
+  // selected date drives the list + week/day interactions
   const [selectedDate, setSelectedDate] = useState<Date>(startOfDay(new Date()));
+
+  // unread notifications badge (for the tile)
+  const [unreadCount, setUnreadCount] = useState<number>(0);
 
   const { days: weekDays, rangeLabel } = useMemo(() => getWeekDaysFor(selectedDate), [selectedDate]);
 
@@ -149,7 +152,26 @@ export default function HomeScreen() {
     }
   };
 
-  const loadHome = async () => {
+  const loadUnreadCount = useCallback(async (userId: string) => {
+    try {
+      const { count, error } = await supabase
+        .from('notifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .is('read_at', null);
+
+      if (error) {
+        console.log('[Home] unread count error:', error);
+        return;
+      }
+
+      setUnreadCount(count ?? 0);
+    } catch (e) {
+      console.log('[Home] loadUnreadCount exception:', e);
+    }
+  }, []);
+
+  const loadHome = useCallback(async () => {
     try {
       setLoading(true);
 
@@ -160,9 +182,13 @@ export default function HomeScreen() {
       if (!user) {
         setMyTeamId(null);
         setScrims([]);
+        setUnreadCount(0);
         setLoading(false);
         return;
       }
+
+      // refresh unread badge in the same load
+      await loadUnreadCount(user.id);
 
       const { data: p, error: pErr } = await supabase
         .from('Profiles')
@@ -212,8 +238,9 @@ export default function HomeScreen() {
       setScrims([]);
       setLoading(false);
     }
-  };
+  }, [loadUnreadCount]);
 
+  // Initial load + auth change reload
   useEffect(() => {
     loadHome();
 
@@ -222,8 +249,14 @@ export default function HomeScreen() {
     });
 
     return () => sub.subscription.unsubscribe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadHome]);
+
+  // Keep the Notifications quick-action badge fresh when returning to Home
+  useFocusEffect(
+    useCallback(() => {
+      loadHome();
+    }, [loadHome])
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -252,7 +285,7 @@ export default function HomeScreen() {
     });
   }, [scrims, myTeamId]);
 
-  // ✅ Filter list by selectedDate (works for past/future)
+  // Filter list by selectedDate (works for past/future)
   const selectedDayScrims = useMemo(() => {
     const d0 = startOfDay(selectedDate);
     return uiScrims.filter((s) => !Number.isNaN(s.startDate.getTime()) && sameDay(s.startDate, d0));
@@ -353,7 +386,7 @@ export default function HomeScreen() {
             </>
           ) : (
             <>
-              {/* ✅ Day view date navigator */}
+              {/* Day view date navigator */}
               <View style={styles.dayHeaderRow}>
                 <Pressable
                   style={styles.dayNavBtn}
@@ -382,7 +415,11 @@ export default function HomeScreen() {
             <View style={styles.scrimsSectionHeader}>
               <Text style={styles.scrimsTitle}>{listTitle}</Text>
               <Text style={styles.scrimsCount}>
-                {loading ? 'Loading…' : `${selectedDayScrims.length} scrim${selectedDayScrims.length === 1 ? '' : 's'}`}
+                {loading
+                  ? 'Loading…'
+                  : `${selectedDayScrims.length} scrim${
+                      selectedDayScrims.length === 1 ? '' : 's'
+                    }`}
               </Text>
             </View>
 
@@ -428,13 +465,24 @@ export default function HomeScreen() {
                         <View style={styles.scrimHeaderRow}>
                           <View style={styles.gameModeContainer}>
                             <View style={styles.gameModeIcon}>
-                              <Ionicons name={getGameModeIcon(scrim.gameMode) as any} size={14} color="#60a5fa" />
+                              <Ionicons
+                                name={getGameModeIcon(scrim.gameMode) as any}
+                                size={14}
+                                color="#60a5fa"
+                              />
                             </View>
                             <Text style={styles.opponentText}>{scrim.opponent}</Text>
                           </View>
 
-                          <View style={[styles.statusBadge, { backgroundColor: `${getStatusColor(scrim.status)}20` }]}>
-                            <View style={[styles.statusDot, { backgroundColor: getStatusColor(scrim.status) }]} />
+                          <View
+                            style={[
+                              styles.statusBadge,
+                              { backgroundColor: `${getStatusColor(scrim.status)}20` },
+                            ]}
+                          >
+                            <View
+                              style={[styles.statusDot, { backgroundColor: getStatusColor(scrim.status) }]}
+                            />
                             <Text style={[styles.statusText, { color: getStatusColor(scrim.status) }]}>
                               {scrim.status.charAt(0).toUpperCase() + scrim.status.slice(1)}
                             </Text>
@@ -475,9 +523,17 @@ export default function HomeScreen() {
               <Text style={styles.actionText}>My Team</Text>
             </Pressable>
 
-            <Pressable style={styles.actionCard} onPress={() => router.push('/(tabs)/profile')}>
-              <Ionicons name="person" size={24} color="#fbbf24" />
-              <Text style={styles.actionText}>Profile</Text>
+            {/* Notifications tile + badge */}
+            <Pressable style={styles.actionCard} onPress={() => router.push('/notifications')}>
+              <View style={{ position: 'relative' }}>
+                <Ionicons name="notifications" size={24} color="#60a5fa" />
+                {unreadCount > 0 ? (
+                  <View style={styles.badge}>
+                    <Text style={styles.badgeText}>{unreadCount > 99 ? '99+' : String(unreadCount)}</Text>
+                  </View>
+                ) : null}
+              </View>
+              <Text style={styles.actionText}>Notifications</Text>
             </Pressable>
           </View>
         </View>
@@ -689,6 +745,23 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   actionText: { color: '#e5e7eb', fontSize: 12, fontWeight: '800' },
+
+  // Badge for notifications tile
+  badge: {
+    position: 'absolute',
+    top: -8,
+    right: -10,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 999,
+    backgroundColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+    borderWidth: 1,
+    borderColor: '#050814',
+  },
+  badgeText: { color: '#fff', fontSize: 10, fontWeight: '900' },
 
   footer: { color: '#6b7280', fontSize: 12, textAlign: 'center', marginTop: 18 },
 });

@@ -1,7 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { SafeAreaView, View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context'
+import {
+  View,
+  Text,
+  TextInput,
+  Pressable,
+  StyleSheet,
+  ActivityIndicator,
+  Alert,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../lib/supabase';
 
 type RegionId =
@@ -34,7 +43,21 @@ function guessTZ() {
   }
 }
 
+type TeamRow = {
+  id: string;
+  owner_id: string;
+  name: string;
+  tag: string | null;
+  region: string;
+  time_zone: string | null;
+};
+
 export default function CreateTeamScreen() {
+  const params = useLocalSearchParams<{ id?: string }>();
+  const teamIdParam = typeof params?.id === 'string' ? params.id : null;
+
+  const isEditMode = !!teamIdParam;
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -44,10 +67,17 @@ export default function CreateTeamScreen() {
   const [timeZone, setTimeZone] = useState<string>(guessTZ());
 
   const [userId, setUserId] = useState<string | null>(null);
+  const [loadedTeam, setLoadedTeam] = useState<TeamRow | null>(null);
 
   const canSubmit = useMemo(() => {
     return teamName.trim().length >= 3 && teamTag.trim().length >= 2 && !!region && !!timeZone;
   }, [teamName, teamTag, region, timeZone]);
+
+  const isOwner = useMemo(() => {
+    if (!isEditMode) return false;
+    if (!loadedTeam || !userId) return false;
+    return loadedTeam.owner_id === userId;
+  }, [isEditMode, loadedTeam, userId]);
 
   useEffect(() => {
     let mounted = true;
@@ -77,14 +107,44 @@ export default function CreateTeamScreen() {
           .eq('id', user.id)
           .maybeSingle();
 
-        if (!pErr && p?.primary_region) {
+        if (!pErr && p?.primary_region && !isEditMode) {
           setRegion(p.primary_region as RegionId);
         }
 
-        setLoading(false);
+        // If editing, load the team and prefill fields
+        if (isEditMode && teamIdParam) {
+          const { data: t, error: tErr } = await supabase
+            .from('teams')
+            .select('id, owner_id, name, tag, region, time_zone')
+            .eq('id', teamIdParam)
+            .maybeSingle();
+
+          if (tErr) throw tErr;
+
+          if (!t) {
+            // team not found or not accessible via RLS
+            if (mounted) {
+              setLoadedTeam(null);
+              setLoading(false);
+            }
+            Alert.alert('Team not found', 'This team may not exist or you may not have access.');
+            router.back();
+            return;
+          }
+
+          if (mounted) {
+            setLoadedTeam(t as any);
+            setTeamName(t.name ?? '');
+            setTeamTag((t.tag ?? '').toString());
+            setRegion((t.region ?? 'atlantic-north') as RegionId);
+            setTimeZone((t.time_zone ?? guessTZ()).toString());
+          }
+        }
+
+        if (mounted) setLoading(false);
       } catch (e) {
         console.log('[CreateTeam] init error:', e);
-        setLoading(false);
+        if (mounted) setLoading(false);
       }
     };
 
@@ -92,7 +152,7 @@ export default function CreateTeamScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [isEditMode, teamIdParam]);
 
   const onCreate = async () => {
     if (!userId) {
@@ -124,16 +184,14 @@ export default function CreateTeamScreen() {
 
       const teamId = createdTeam.id as string;
 
-      // 2) Ensure owner is a member (fixes the “owner not in members” issue long-term)
+      // 2) Ensure owner is a member
       const { error: memberErr } = await supabase.from('team_members').insert({
         team_id: teamId,
         user_id: userId,
         status: 'active',
       });
 
-      // If it already exists (unique constraint), ignore
       if (memberErr && !String(memberErr.message || '').toLowerCase().includes('duplicate')) {
-        // Note: supabase error text varies; we only ignore duplicate-ish errors
         console.log('[CreateTeam] member insert error:', memberErr);
       }
 
@@ -152,6 +210,104 @@ export default function CreateTeamScreen() {
     }
   };
 
+  const onSaveChanges = async () => {
+    if (!userId) {
+      Alert.alert('Not signed in', 'Please sign in again.');
+      return;
+    }
+    if (!teamIdParam) return;
+
+    if (!canSubmit) {
+      Alert.alert('Missing info', 'Please enter a team name and tag.');
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      // Only owner can update team (safety check in query)
+      const { data: updated, error } = await supabase
+        .from('teams')
+        .update({
+          name: teamName.trim(),
+          tag: teamTag.trim().toUpperCase(),
+          region,
+          time_zone: timeZone,
+        })
+        .eq('id', teamIdParam)
+        .eq('owner_id', userId)
+        .select('id, owner_id, name, tag, region, time_zone')
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!updated?.id) {
+        Alert.alert('Not allowed', 'Only the team owner can edit this team.');
+        return;
+      }
+
+      setLoadedTeam(updated as any);
+      Alert.alert('Saved', 'Team updated successfully.');
+      router.back();
+    } catch (e: any) {
+      console.log('[CreateTeam] save error:', e);
+      Alert.alert('Could not save', e?.message ?? 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onDeleteTeam = async () => {
+    if (!userId || !teamIdParam) return;
+
+    Alert.alert(
+      'Delete team?',
+      'This will permanently delete the team and its members. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setSaving(true);
+
+              // Delete ONLY if current user is owner (safety)
+              const { data: deleted, error: delErr } = await supabase
+                .from('teams')
+                .delete()
+                .eq('id', teamIdParam)
+                .eq('owner_id', userId)
+                .select('id')
+                .maybeSingle();
+
+              if (delErr) throw delErr;
+
+              if (!deleted?.id) {
+                Alert.alert('Not allowed', 'Only the team owner can delete this team.');
+                return;
+              }
+
+              // Clear *this user's* primary team if it was this team
+              await supabase.from('Profiles').update({ primary_team_id: null }).eq('id', userId).eq('primary_team_id', teamIdParam);
+
+              Alert.alert('Deleted', 'Team deleted.');
+              router.replace('/teams');
+            } catch (e: any) {
+              console.log('[CreateTeam] delete error:', e);
+              Alert.alert('Could not delete', e?.message ?? 'Please try again.');
+            } finally {
+              setSaving(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const screenTitle = isEditMode ? 'Team Settings' : 'Create Team';
+  const screenSubtitle = isEditMode ? 'Edit your team details' : 'Set up your team to start scrimming';
+
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
@@ -160,8 +316,8 @@ export default function CreateTeamScreen() {
             <Ionicons name="chevron-back" size={20} color="#e5e7eb" />
           </Pressable>
           <View style={{ flex: 1 }}>
-            <Text style={styles.title}>Create Team</Text>
-            <Text style={styles.subtitle}>Set up your team to start scrimming</Text>
+            <Text style={styles.title}>{screenTitle}</Text>
+            <Text style={styles.subtitle}>{screenSubtitle}</Text>
           </View>
         </View>
 
@@ -220,13 +376,32 @@ export default function CreateTeamScreen() {
               autoCorrect={false}
             />
 
-            <Pressable
-              disabled={!canSubmit || saving}
-              onPress={onCreate}
-              style={[styles.primaryBtn, (!canSubmit || saving) && { opacity: 0.6 }]}
-            >
-              {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Create Team</Text>}
-            </Pressable>
+            {!isEditMode ? (
+              <Pressable
+                disabled={!canSubmit || saving}
+                onPress={onCreate}
+                style={[styles.primaryBtn, (!canSubmit || saving) && { opacity: 0.6 }]}
+              >
+                {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Create Team</Text>}
+              </Pressable>
+            ) : (
+              <>
+                <Pressable
+                  disabled={!canSubmit || saving}
+                  onPress={onSaveChanges}
+                  style={[styles.primaryBtn, (!canSubmit || saving) && { opacity: 0.6 }]}
+                >
+                  {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Save Changes</Text>}
+                </Pressable>
+
+                {/* Delete Team (Owner only) */}
+                {isOwner ? (
+                  <Pressable disabled={saving} onPress={onDeleteTeam} style={[styles.dangerBtn, saving && { opacity: 0.7 }]}>
+                    <Text style={styles.dangerBtnText}>Delete Team</Text>
+                  </Pressable>
+                ) : null}
+              </>
+            )}
           </View>
         )}
 
@@ -302,6 +477,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryBtnText: { color: '#fff', fontWeight: '900' },
+
+  dangerBtn: {
+    marginTop: 10,
+    backgroundColor: 'rgba(248,113,113,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(248,113,113,0.45)',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  dangerBtnText: { color: '#fca5a5', fontWeight: '900' },
 
   footer: { color: '#64748b', fontSize: 12, textAlign: 'center', marginTop: 18 },
 });
